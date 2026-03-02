@@ -128,22 +128,39 @@ function isTimeSlotAvailable(date, timeStr, durationHours, bookings) {
 function generateGoogleCalLink(booking) {
   const startHour = timeToHour(booking.time);
   const endHour = startHour + (booking.hours || 1);
-
   const pad = (n) => String(Math.floor(n)).padStart(2, "0");
   const dateClean = booking.date.replace(/-/g, "");
   const startMin = Math.round((startHour % 1) * 60);
   const endMin = Math.round((endHour % 1) * 60);
   const startStr = `${dateClean}T${pad(startHour)}${pad(startMin)}00`;
   const endStr = `${dateClean}T${pad(endHour)}${pad(endMin)}00`;
-
   const title = encodeURIComponent(`🌊 North Wake Jet Ski Rental — ${booking.rentalType}`);
   const details = encodeURIComponent(
     `Confirmation: ${booking.id?.toUpperCase()}\nPackage: ${booking.rentalType} (${booking.hours}hr)\nTotal: $${booking.totalPrice}\n${booking.addons ? `Add-ons: ${booking.addons}\n` : ""}` +
-    `\n📍 Hayden Lake, Idaho\n💳 Payment via Venmo: @Mason-Stowell-12\n\n⚠️ Please bring a valid photo ID matching your driver's license.\nLife jackets and fuel are provided.\n\nQuestions? Contact North Wake directly.`
+    `\n📍 Hayden Lake, Idaho\n💳 Payment via Venmo: @Mason-Stowell-12\n\n⚠️ Please bring a valid photo ID matching your driver's license.\nLife jackets and fuel are provided.\n\nQuestions? Call (208) 889-9006`
   );
   const location = encodeURIComponent("Hayden Lake, Idaho");
-
   return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startStr}/${endStr}&details=${details}&location=${location}&sf=true`;
+}
+
+function generateAppleCalLink(booking) {
+  const startHour = timeToHour(booking.time);
+  const endHour = startHour + (booking.hours || 1);
+  const pad = (n) => String(Math.floor(n)).padStart(2, "0");
+  const dateClean = booking.date.replace(/-/g, "");
+  const startMin = Math.round((startHour % 1) * 60);
+  const endMin = Math.round((endHour % 1) * 60);
+  const ics = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//North Wake//EN", "BEGIN:VEVENT",
+    `SUMMARY:🌊 North Wake Jet Ski — ${booking.rentalType}`,
+    `DTSTART:${dateClean}T${pad(startHour)}${pad(startMin)}00`,
+    `DTEND:${dateClean}T${pad(endHour)}${pad(endMin)}00`,
+    `DESCRIPTION:Conf: ${booking.id?.toUpperCase()} | ${booking.rentalType} (${booking.hours}hr) | $${booking.totalPrice} | Venmo: @Mason-Stowell-12 | Bring valid photo ID | Call (208) 889-9006`,
+    "LOCATION:Hayden Lake\\, Idaho",
+    `UID:${booking.id}@northwake`,
+    "END:VEVENT", "END:VCALENDAR"
+  ].join("\r\n");
+  return "data:text/calendar;charset=utf-8," + encodeURIComponent(ics);
 }
 
 // Google Calendar API integration for owner's calendar
@@ -269,6 +286,7 @@ export default function NorthWakeApp() {
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedTime, setSelectedTime] = useState("");
   const [selectedAddons, setSelectedAddons] = useState([]);
+  const [hourlyCount, setHourlyCount] = useState(1);
   const [renterInfo, setRenterInfo] = useState({ firstName: "", lastName: "", email: "", phone: "", driverLicense: "", dlState: "", dob: "", address: "", city: "", state: "", zip: "", emergencyName: "", emergencyPhone: "", numRiders: "1" });
   const [waiverScrolled, setWaiverScrolled] = useState(false);
   const [waiverAgreed, setWaiverAgreed] = useState(false);
@@ -287,6 +305,10 @@ export default function NorthWakeApp() {
   const [googleClientId, setGoogleClientId] = useState("");
   const [calSyncStatus, setCalSyncStatus] = useState(""); // "syncing", "success", "error", ""
   const [showCalSetup, setShowCalSetup] = useState(false);
+  const [blackoutDates, setBlackoutDates] = useState([]);
+  const [newBlackoutStart, setNewBlackoutStart] = useState("");
+  const [newBlackoutEnd, setNewBlackoutEnd] = useState("");
+  const [showBlackoutForm, setShowBlackoutForm] = useState(false);
 
   // Simple hash for password check — not a backend, but prevents casual access
   // Change this hash if you want a different password. Current password: NorthWake2026!
@@ -311,6 +333,29 @@ export default function NorthWakeApp() {
 
   useEffect(() => { (async () => { try { const r = await window.storage.get("nw-bookings"); if (r?.value) setBookings(JSON.parse(r.value)); } catch (e) {} })(); }, []);
   useEffect(() => { (async () => { try { const r = await window.storage.get("nw-google-client-id"); if (r?.value) setGoogleClientId(r.value); } catch (e) {} })(); }, []);
+  useEffect(() => { (async () => { try { const r = await window.storage.get("nw-blackouts"); if (r?.value) setBlackoutDates(JSON.parse(r.value)); } catch (e) {} })(); }, []);
+
+  const saveBlackoutDates = async (dates) => {
+    setBlackoutDates(dates);
+    try { await window.storage.set("nw-blackouts", JSON.stringify(dates)); } catch (e) {}
+  };
+
+  const addBlackout = () => {
+    if (!newBlackoutStart) return;
+    const end = newBlackoutEnd || newBlackoutStart;
+    const updated = [...blackoutDates, { start: newBlackoutStart, end, note: "" }];
+    saveBlackoutDates(updated);
+    setNewBlackoutStart(""); setNewBlackoutEnd(""); setShowBlackoutForm(false);
+  };
+
+  const removeBlackout = (index) => {
+    const updated = blackoutDates.filter((_, i) => i !== index);
+    saveBlackoutDates(updated);
+  };
+
+  const isDateBlackedOut = (dateStr) => {
+    return blackoutDates.some(b => dateStr >= b.start && dateStr <= b.end);
+  };
 
   const saveGoogleClientId = async (id) => {
     setGoogleClientId(id);
@@ -349,6 +394,13 @@ export default function NorthWakeApp() {
   const saveBooking = async (b) => { const u = [...bookings, b]; setBookings(u); try { await window.storage.set("nw-bookings", JSON.stringify(u)); } catch (e) {} };
   const clearBookings = async () => { setBookings([]); try { await window.storage.delete("nw-bookings"); } catch (e) {} };
 
+  const cancelBooking = async (bookingId) => {
+    if (!confirm("Cancel this booking? This will free up the time slot.")) return;
+    const updated = bookings.filter(b => b.id !== bookingId);
+    setBookings(updated);
+    try { await window.storage.set("nw-bookings", JSON.stringify(updated)); } catch (e) {}
+  };
+
   const toggleBookingStatus = async (bookingId, field) => {
     const updated = bookings.map(b => b.id === bookingId ? { ...b, [field]: !b[field] } : b);
     setBookings(updated);
@@ -356,14 +408,16 @@ export default function NorthWakeApp() {
   };
 
   const resetBooking = () => {
-    setStep(0); setSelectedRental(null); setSelectedDate(""); setSelectedTime(""); setSelectedAddons([]);
+    setStep(0); setSelectedRental(null); setSelectedDate(""); setSelectedTime(""); setSelectedAddons([]); setHourlyCount(1);
     setRenterInfo({ firstName: "", lastName: "", email: "", phone: "", driverLicense: "", dlState: "", dob: "", address: "", city: "", state: "", zip: "", emergencyName: "", emergencyPhone: "", numRiders: "1" });
     setWaiverScrolled(false); setWaiverAgreed(false); setSignature(null);
   };
 
   const rental = RENTAL_OPTIONS.find(r => r.id === selectedRental);
+  const effectiveHours = selectedRental === "hourly" ? hourlyCount : (rental?.hours || 1);
+  const basePrice = selectedRental === "hourly" ? 100 * hourlyCount : (rental?.price || 0);
   const addonsTotal = selectedAddons.reduce((s, id) => s + (ADDONS.find(a => a.id === id)?.price || 0), 0);
-  const totalPrice = rental ? rental.price + addonsTotal : 0;
+  const totalPrice = basePrice + addonsTotal;
 
   const canProceed = () => {
     switch (step) {
@@ -385,7 +439,7 @@ export default function NorthWakeApp() {
       if (stored?.value) latestBookings = JSON.parse(stored.value);
     } catch (e) {}
 
-    if (!isTimeSlotAvailable(selectedDate, selectedTime, rental.hours, latestBookings)) {
+    if (!isTimeSlotAvailable(selectedDate, selectedTime, effectiveHours, latestBookings)) {
       setSubmitting(false);
       alert("Sorry, this time slot was just booked by someone else. Please go back and select a different time.");
       setBookings(latestBookings);
@@ -397,17 +451,20 @@ export default function NorthWakeApp() {
     const booking = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       timestamp: new Date().toISOString(),
-      rentalType: rental.label,
+      rentalType: selectedRental === "hourly" ? `Hourly (${hourlyCount}hr)` : rental.label,
       rentalId: rental.id,
-      hours: rental.hours,
+      hours: effectiveHours,
       date: selectedDate,
       time: selectedTime,
       addons: selectedAddons.map(id => ADDONS.find(a => a.id === id)?.name).join(", "),
       addonsTotal,
-      basePrice: rental.price,
+      basePrice,
       totalPrice,
       ...renterInfo,
       signed: "YES",
+      signatureData: signature,
+      waiverText: WAIVER_TEXT,
+      waiverSignedAt: new Date().toISOString(),
     };
     await saveBooking(booking);
     // If owner has Google Calendar connected, sync the event
@@ -556,6 +613,16 @@ export default function NorthWakeApp() {
             <button style={btnGold} onClick={() => { resetBooking(); setView("booking"); }}>Reserve Your Ride</button>
           </div>
 
+          {/* Contact */}
+          <div style={{ ...card, textAlign: "center", marginBottom: 20 }}>
+            <p style={{ ...labelStyle, textAlign: "center", margin: "0 0 12px" }}>Contact</p>
+            <p style={{ fontSize: 14, color: textBody, marginBottom: 8 }}>Questions? We'd love to hear from you.</p>
+            <a href="tel:2088899006" style={{ fontSize: 22, fontWeight: 700, color: gold, fontFamily: "'Cormorant Garamond', serif", textDecoration: "none" }}>
+              (208) 889-9006
+            </a>
+            <p style={{ fontSize: 12, color: textMuted, marginTop: 8 }}>Hayden Lake, Idaho</p>
+          </div>
+
           <div style={{ textAlign: "center", paddingBottom: 40 }}>
             <div style={{ height: 1, background: `linear-gradient(90deg, transparent, ${gold}15, transparent)`, marginBottom: 20 }} />
             <button onClick={() => setView("admin")} style={{ background: "none", border: "none", color: textMuted, fontSize: 12, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", opacity: 0.5, padding: "8px 16px", letterSpacing: "0.5px" }}>
@@ -622,6 +689,17 @@ export default function NorthWakeApp() {
                 }}
               >
                 📅 Add to Google Calendar
+              </a>
+              <div style={{ height: 10 }} />
+              <a
+                href={generateAppleCalLink(last)}
+                download={`north-wake-${last.id}.ics`}
+                style={{
+                  ...btnOutline, display: "inline-flex", alignItems: "center", gap: 8,
+                  textDecoration: "none", padding: "12px 24px",
+                }}
+              >
+                🍎 Add to Apple Calendar
               </a>
               <p style={{ fontSize: 12, color: textMuted, marginTop: 10 }}>Adds date, time, location, and booking details to your calendar</p>
             </div>
@@ -749,6 +827,44 @@ export default function NorthWakeApp() {
             <button onClick={clearBookings} style={{ ...btnOutline, padding: "10px 18px", fontSize: 13, color: "#8b4444", borderColor: "#8b444444" }} disabled={!bookings.length}>Clear All</button>
           </div>
 
+          {/* Blackout Dates */}
+          <div style={{ ...card, marginBottom: 24 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div>
+                <p style={{ ...labelStyle, margin: "0 0 4px" }}>Blocked Dates</p>
+                <p style={{ fontSize: 13, color: textMuted, margin: 0 }}>Block off dates when you're unavailable — customers won't see these dates</p>
+              </div>
+              <button onClick={() => setShowBlackoutForm(!showBlackoutForm)} style={{ ...btnOutline, padding: "8px 16px", fontSize: 12 }}>
+                {showBlackoutForm ? "Cancel" : "+ Block Dates"}
+              </button>
+            </div>
+            {showBlackoutForm && (
+              <div style={{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap", marginBottom: 12, padding: 12, background: "#0d0b08", borderRadius: 10 }}>
+                <div style={{ flex: 1, minWidth: 130 }}>
+                  <label style={labelStyle}>From</label>
+                  <input type="date" style={inputStyle} value={newBlackoutStart} onChange={e => setNewBlackoutStart(e.target.value)} />
+                </div>
+                <div style={{ flex: 1, minWidth: 130 }}>
+                  <label style={labelStyle}>To (optional)</label>
+                  <input type="date" style={inputStyle} value={newBlackoutEnd} onChange={e => setNewBlackoutEnd(e.target.value)} />
+                </div>
+                <button onClick={addBlackout} disabled={!newBlackoutStart} style={{ ...btnGold, padding: "10px 18px", fontSize: 13, opacity: newBlackoutStart ? 1 : 0.3 }}>Block</button>
+              </div>
+            )}
+            {blackoutDates.length > 0 ? (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {blackoutDates.map((b, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "#1a1610", border: `1px solid ${borderColor}`, borderRadius: 8, padding: "6px 12px", fontSize: 13 }}>
+                    <span style={{ color: textBody }}>{formatDate(b.start)}{b.end !== b.start ? ` → ${formatDate(b.end)}` : ""}</span>
+                    <button onClick={() => removeBlackout(i)} style={{ background: "none", border: "none", color: "#8b4444", cursor: "pointer", fontSize: 16, padding: 0, lineHeight: 1 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={{ fontSize: 12, color: textMuted, opacity: 0.6 }}>No dates blocked</p>
+            )}
+          </div>
+
           {/* Google Calendar Sync */}
           <div style={{ ...card, marginBottom: 24 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -849,8 +965,8 @@ export default function NorthWakeApp() {
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead>
-                    <tr>{["Conf#", "Date", "Time", "Package", "Name", "Phone", "Email", "DL#", "Riders", "Total", "Waiver", "Paid", "Done"].map(h => (
-                      <th key={h} style={{ textAlign: "left", padding: "10px 8px", color: textMuted, fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 1, borderBottom: `1px solid ${borderColor}`, whiteSpace: "nowrap" }}>{h}</th>
+                    <tr>{["Conf#", "Date", "Time", "Package", "Name", "Phone", "Email", "DL#", "Riders", "Total", "Waiver", "Paid", "Done", ""].map((h, hi) => (
+                      <th key={hi} style={{ textAlign: "left", padding: "10px 8px", color: textMuted, fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: 1, borderBottom: `1px solid ${borderColor}`, whiteSpace: "nowrap" }}>{h}</th>
                     ))}</tr>
                   </thead>
                   <tbody>
@@ -880,6 +996,13 @@ export default function NorthWakeApp() {
                             background: b.completed ? `${gold}22` : "transparent", cursor: "pointer",
                             fontSize: 14, color: b.completed ? gold : textMuted, display: "inline-flex", alignItems: "center", justifyContent: "center",
                           }}>{b.completed ? "✓" : ""}</button>
+                        </td>
+                        <td style={{ padding: "10px 8px", textAlign: "center" }}>
+                          <button onClick={() => cancelBooking(b.id)} style={{
+                            width: 28, height: 28, borderRadius: 8, border: "1px solid #8b444444",
+                            background: "transparent", cursor: "pointer",
+                            fontSize: 14, color: "#8b4444", display: "inline-flex", alignItems: "center", justifyContent: "center",
+                          }}>×</button>
                         </td>
                       </tr>
                     ))}
@@ -1009,18 +1132,40 @@ export default function NorthWakeApp() {
               <label style={labelStyle}>Date</label>
               <select value={selectedDate} onChange={e => { setSelectedDate(e.target.value); setSelectedTime(""); }} style={{ ...inputStyle, cursor: "pointer", appearance: "none" }}>
                 <option value="">Select a date...</option>
-                {getSeasonDates().map(d => (
+                {getSeasonDates().filter(d => !isDateBlackedOut(d)).map(d => (
                   <option key={d} value={d}>{formatDate(d)} — {getDayName(d)}</option>
                 ))}
               </select>
             </div>
+
+            {/* Hourly duration selector */}
+            {selectedRental === "hourly" && (
+              <div style={{ ...card, marginBottom: 16 }}>
+                <label style={labelStyle}>How many hours?</label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                  {[1, 2, 3].map(n => (
+                    <div key={n} onClick={() => { setHourlyCount(n); setSelectedTime(""); }} style={{
+                      padding: "14px 12px", borderRadius: 10, textAlign: "center", cursor: "pointer",
+                      fontSize: 15, fontWeight: 600,
+                      background: hourlyCount === n ? gold : "transparent",
+                      color: hourlyCount === n ? black : textBody,
+                      border: `1px solid ${hourlyCount === n ? gold : borderColor}`,
+                      transition: "all 0.15s",
+                    }}>
+                      <div>{n} {n === 1 ? "Hour" : "Hours"}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4, fontFamily: "'Cormorant Garamond', serif" }}>${100 * n}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {selectedDate && (
               <div style={{ ...card }}>
                 <label style={labelStyle}>Available Time Slots</label>
                 <div style={{ display: "grid", gridTemplateColumns: selectedRental === "hourly" ? "repeat(3, 1fr)" : "1fr 1fr", gap: 10 }}>
                   {(TIME_SLOTS[selectedRental] || []).map(t => {
-                    const available = isTimeSlotAvailable(selectedDate, t, rental?.hours || 1, bookings);
+                    const available = isTimeSlotAvailable(selectedDate, t, effectiveHours, bookings);
                     return (
                       <div key={t} onClick={() => available && setSelectedTime(t)} style={{
                         padding: "14px 12px", borderRadius: 10, textAlign: "center",
@@ -1039,7 +1184,7 @@ export default function NorthWakeApp() {
                     );
                   })}
                 </div>
-                {(TIME_SLOTS[selectedRental] || []).every(t => !isTimeSlotAvailable(selectedDate, t, rental?.hours || 1, bookings)) && (
+                {(TIME_SLOTS[selectedRental] || []).every(t => !isTimeSlotAvailable(selectedDate, t, effectiveHours, bookings)) && (
                   <p style={{ color: "#c4544a", fontSize: 13, marginTop: 12, textAlign: "center" }}>No availability on this date. Please select a different date.</p>
                 )}
               </div>
